@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "props": {},
+  "states": [
+    {
+      "key": "spaces",
+      "label": "space の数・内容",
+      "about": "worktree の入れ子や git 情報つき",
+      "kind": "radio",
+      "options": [
+        { "value": "empty", "label": "空" },
+        { "value": "one", "label": "1件" },
+        { "value": "few", "label": "少数" },
+        { "value": "many", "label": "多数(複数フォルダ)" },
+        { "value": "long", "label": "長い名前・ブランチ" }
+      ],
+      "default": "few"
+    },
+    {
+      "key": "status",
+      "label": "状態",
+      "kind": "radio",
+      "options": [
+        { "value": "mixed", "label": "混在" },
+        { "value": "calm", "label": "すべて idle" },
+        { "value": "blocked", "label": "各グループに blocked" }
+      ],
+      "default": "mixed"
+    },
+    { "key": "grouped", "label": "フォルダ見出しでまとめる", "kind": "switch", "default": true },
+    { "key": "folded", "label": "グループを折りたたむ", "about": "見出しに最も緊急な状態が出る", "kind": "switch", "default": false },
+    { "key": "remote", "label": "リモートマシンあり", "kind": "switch", "default": false },
+    { "key": "narrow", "label": "幅の狭いレール表示", "kind": "switch", "default": false }
+  ]
+}

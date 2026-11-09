@@ -37,6 +37,136 @@ const FALLBACK = 60000;
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 
 // A space speaks up only when something in it needs you.
+// ---- Storybook のモックデータ(旧 mock.js。アプリのフォルダ外へ解決する import は拒否されるため同居) ----
+// storybook.json の状態と一対一。構造を変えたら storybook.json も同時に直すこと。
+// 本番データ関数(spaces など)は使わない。
+
+const repo = (name) => JSON.stringify([null, `/mock/${name}/.git`]);
+const git = (name, branch = "main", ahead = 0, behind = 0, linked = false) => ({ name, branch, ahead, behind, repo: repo(name), linked });
+
+// 1 ブロック = 親フォルダ 1 つ。items の各要素が top-level の space、kids が worktree。
+// block.folder は同じフォルダの space が 2 件以上のときの見出し名。
+const sp = (name, status, g, color, kids = []) => ({ name, status, g, color, kids });
+
+const SETS = {
+  empty: { local: [], remote: [] },
+  one: {
+    local: [{ folder: "Projects", items: [sp("herdr", "idle", git("herdr"), "ansi6")] }],
+    remote: [],
+  },
+  few: {
+    local: [
+      {
+        folder: "herdr-mods",
+        items: [
+          sp("spaces-tree", "working", git("spaces-tree", "feature/tree", 2, 0), "ansi5", [
+            sp("tree-fix", "idle", git("spaces-tree", "tree-fix", 0, 1, true)),
+            sp("tree-ui", "done", git("spaces-tree", "tree-ui", 3, 0, true)),
+          ]),
+          sp("launcher", "idle", git("launcher"), "ansi3"),
+        ],
+      },
+      { folder: "notes", items: [sp("notes", "idle", null, "ansi2")] },
+    ],
+    remote: [],
+  },
+  many: {
+    local: [
+      {
+        folder: "herdr-mods",
+        items: ["spaces-tree", "launcher", "github", "machine-login", "ModsStoryBook"].map((n, i) =>
+          sp(n, ["working", "idle", "done", "idle", "blocked"][i], git(n, i % 2 ? "main" : "dev", i, i % 3), ["ansi5", "ansi3", "ansi4", "ansi2", "ansi1"][i])),
+      },
+      {
+        folder: "research",
+        items: ["survey", "crest", "zemi", "peer-review"].map((n, i) =>
+          sp(n, ["idle", "working", "idle", "done"][i], git(n), ["ansi6", "ansi3", "ansi4", "ansi5"][i])),
+      },
+      {
+        folder: "work",
+        items: [
+          sp("app", "working", git("app", "main", 1, 0), "ansi2", [
+            sp("app-a", "working", git("app", "feat-a", 4, 0, true)),
+            sp("app-b", "blocked", git("app", "feat-b", 0, 2, true)),
+            sp("app-c", "idle", git("app", "feat-c", 0, 0, true)),
+          ]),
+          sp("api", "idle", git("api"), "ansi1"),
+          sp("docs", "idle", git("docs"), "ansi6"),
+        ],
+      },
+      { folder: "tmp", items: [sp("scratch", "idle", null, "ansi4")] },
+      { folder: "tmp2", items: [sp("playground", "idle", git("playground", "wip"), "ansi3")] },
+    ],
+    remote: [],
+  },
+  long: {
+    local: [
+      {
+        folder: "a-very-long-parent-folder-name-for-grouping",
+        items: [
+          sp("a-really-long-space-name-that-overflows-the-row", "working", git("a-really-long-space-name-that-overflows-the-row", "feature/some-extremely-long-branch-name", 12, 34), "ansi5", [
+            sp("feature-some-extremely-long-worktree-branch-name", "blocked", git("a-really-long-space-name-that-overflows-the-row", "feature-some-extremely-long-worktree-branch-name", 120, 0, true)),
+          ]),
+          sp("日本語のとても長いスペース名のテスト表示", "idle", git("nihongo", "ブランチ"), "ansi1"),
+        ],
+      },
+      { folder: "x", items: [sp("a", "idle", null, "ansi6")] },
+    ],
+    remote: [],
+  },
+};
+
+const REMOTE_SETS = {
+  few: [sp("build-server", "working", git("build-server", "main", 0, 3), "ansi4"), sp("gpu-box", "idle", git("gpu-box"), "ansi2")],
+};
+
+const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+
+// status 状態: mixed = そのまま / calm = すべて idle / blocked = 各ブロックの先頭を blocked
+function restatus(item, mode, first) {
+  const s = mode === "calm" ? "idle" : mode === "blocked" && first ? "blocked" : item.status;
+  return s;
+}
+
+// 本番の ordered() が返す行と同じ形: { head, w } / { w, i, g, tree, depth, group }
+function mockRows(sb, machine = null) {
+  const set = SETS[sb.spaces ?? "few"] ?? SETS.few;
+  const mode = sb.status ?? "mixed";
+  const grouped = sb.grouped ?? true;
+  const blocks = machine ? [{ folder: null, items: REMOTE_SETS[sb.spaces] ?? (sb.spaces === "empty" ? [] : REMOTE_SETS.few) }] : set.local;
+  const rows = [];
+  let n = 0;
+  const all = sb.foldedKeys === "all";
+  const folded = new Set(all ? [] : sb.foldedKeys ?? []);
+  blocks.forEach((b, bi) => {
+    const grp = grouped && b.folder && b.items.length >= 2 ? `mock|${b.folder}` : null;
+    const make = (item, tree, first) => ({
+      w: { id: `mock-${machine ?? "local"}-${n++}`, name: item.name, status: restatus(item, mode, first), color: item.color ?? "ansi6", machine },
+      g: item.g, tree, depth: grp ? 1 : 0, group: grp,
+    });
+    const part = [];
+    b.items.forEach((item, ii) => {
+      part.push(make(item, null, ii === 0));
+      item.kids.forEach((k, ki) => part.push(make(k, ki === item.kids.length - 1 ? "└─" : "├─", false)));
+    });
+    if (grp) {
+      rows.push({ head: { key: grp, name: b.folder, ids: part.map((r) => r.w) }, w: { id: `group:${grp}`, machine } });
+      if (!all && !folded.has(grp)) rows.push(...part);
+    } else rows.push(...part);
+  });
+  return rows.map((r, i) => (r.head ? r : { ...r, i }));
+}
+
+function topStatus(ids) {
+  return ids.map((w) => w.status).sort((a, b) => RANK[b] - RANK[a])[0];
+}
+
+// モック中(Story が開いたプレビュー)は選択値、本番なら null
+export function storybook(mod) {
+  const id = props()?.storybook;
+  return id ? (shared(`storybook:${mod}:${id}`)?.values ?? {}) : null;
+}
+
 export function glyph(status) {
   return status === "blocked" || status === "done" ? "●" : "·";
 }
@@ -44,6 +174,9 @@ export function glyph(status) {
 export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
+
+// storybook.json の default と同じ値
+const DEFAULTS = { spaces: "few", status: "mixed", grouped: true, folded: false, remote: false, narrow: false };
 
 export default class Spaces extends View {
   init(_props, cx) {
@@ -57,7 +190,10 @@ export default class Spaces extends View {
     this.watching = new Set(); // local repos' git folders
     // Spaces made while this runs wait (at most a moment) for their git, so a
     // worktree appears under its repo instead of jumping there.
-    this.shown = new Set(spaces().map((s) => s.id));
+    this.shown = storybook("spaces-tree") ? null : new Set(spaces().map((s) => s.id));
+    this.mock = false;
+    this.mockActive = null;
+    this.mockFolded = new Set();
     this.born = {};
     this.pressed = null;
     this.over = null;
@@ -74,6 +210,8 @@ export default class Spaces extends View {
   }
 
   checkNew(cx) {
+    if (storybook("spaces-tree")) return;
+    this.shown ??= new Set(spaces().map((s) => s.id));
     const now = Date.now();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
@@ -123,6 +261,7 @@ export default class Spaces extends View {
   }
 
   refreshMachines(cx) {
+    if (storybook("spaces-tree")) return;
     cx.spawn(async cx => {
       try { const r = await hc(["machine", "ls", "--json"]); if (r.code === 0) this.machines = (JSON.parse(r.stdout).machines ?? []).filter((m) => !m.temporary); } catch {}
       cx.notify();
@@ -258,6 +397,7 @@ export default class Spaces extends View {
 
   // Spaces in order, each worktree space moved under its main checkout's.
   ordered() {
+    this.shown ??= new Set(spaces().map((s) => s.id));
     const sp = spaces(), ps = panes();
     const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
     for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
@@ -405,15 +545,16 @@ export default class Spaces extends View {
   }
 
   groupHead({ head }, t) {
-    const folded = this.foldedGroups.has(head.key);
+    const set = this.mock ? this.mockFolded : this.foldedGroups;
+    const folded = this.mock && this.mockAll ? true : set.has(head.key);
     const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
-    const live = spaces();
-    const top = head.ids.map((m) => live.find((x) => x.id === m.id)?.status).filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0];
+    const live = this.mock ? [] : spaces();
+    const top = this.mock ? topStatus(head.ids) : head.ids.map((m) => live.find((x) => x.id === m.id)?.status).filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0];
     return h_flex().id(`group-${head.key}`).h(26).flex_none().px(8).mt(4).gap(6).items_center().rounded(6)
       .text_size(11).font_semibold().text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => {
-        folded ? this.foldedGroups.delete(head.key) : this.foldedGroups.add(head.key);
-        localStorage.setItem("groups.folded", JSON.stringify([...this.foldedGroups]));
+        folded ? set.delete(head.key) : set.add(head.key);
+        if (!this.mock) localStorage.setItem("groups.folded", JSON.stringify([...this.foldedGroups]));
         cx.notify();
       })
       .child(div().w(10).flex_none().child(folded ? "\u25b8" : "\u25be"))
@@ -424,9 +565,9 @@ export default class Spaces extends View {
 
   row({ w, i, g, tree, depth }, t) {
     const on = w.active;
-    const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
-    const colors = shared("space.colors") ?? {};
-    const color = colors[w.id] ?? "ansi6";
+    const fromIndex = this.mock || this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
+    const colors = this.mock ? {} : shared("space.colors") ?? {};
+    const color = this.mock ? w.color : colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
     return v_flex()
       .relative()
@@ -446,10 +587,12 @@ export default class Spaces extends View {
           .when(fromIndex > i, line => line.top(0)),
       ))
       .on_mouse_down("left", () => {
+        if (this.mock) return;
         this.pressed = w.id;
         this.over = w.id;
       })
       .on_mouse_move((_e, cx) => {
+        if (this.mock) return;
         const source = spaces().find(s => s.id === this.pressed);
         const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
         if (this.pressed !== null && this.over !== over) {
@@ -458,6 +601,7 @@ export default class Spaces extends View {
         }
       })
       .on_mouse_up("left", (_e, cx) => {
+        if (this.mock) { this.mockActive = w.id; cx.notify(); return; }
         const from = this.pressed;
         const over = this.over;
         this.pressed = null;
@@ -468,7 +612,7 @@ export default class Spaces extends View {
         } else if (from === w.id) run("space.select", { id: w.id });
         cx.notify();
       })
-      .on_mouse_down("right", () => this.menu(w))
+      .on_mouse_down("right", () => { if (!this.mock) this.menu(w); })
       .child(
         h_flex()
           .gap(9)
@@ -489,12 +633,46 @@ export default class Spaces extends View {
       .gap(4)
       .when(w.active, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_click(() => run("space.select", { id: w.id }))
+      .on_click((_e, cx) => { if (this.mock) { this.mockActive = w.id; cx.notify(); } else run("space.select", { id: w.id }); })
       .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
       .child(div().text_color(tone(t, w.status)).child(glyph(w.status)));
   }
 
+  // モック描画: 本番データ・コマンド・共有状態に触れない。
+  renderMock(values) {
+    const sb = { ...DEFAULTS, ...values };
+    const t = theme();
+    this.mock = true;
+    this.mockAll = !!sb.folded;
+    const collapsed = !!sb.narrow;
+    const withState = { ...sb, foldedKeys: sb.folded ? "all" : [...this.mockFolded] };
+    const all = [...mockRows(withState), ...(sb.remote ? mockRows(withState, "build-server") : [])];
+    this.mockActive ??= all.find((r) => !r.head)?.w.id ?? null;
+    const draw = (r) => {
+      const x = r.head ? r : { ...r, w: { ...r.w, active: r.w.id === this.mockActive } };
+      return r.head ? (collapsed ? div().h(1) : this.groupHead(x, t)) : collapsed ? this.compact(x, t) : this.row(x, t);
+    };
+    const section = (m, label, rows) => [
+      h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 2 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
+        .child(svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none())
+        .when(!collapsed, el => el.child(div().flex_1().truncate().child(label)))
+        .child(div().size(6).rounded(3).flex_none().bg(t.ansi2)),
+      ...(rows.length ? rows.map(draw) : [h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")]),
+    ];
+    const local = all.filter((r) => !r.w.machine);
+    const children = sb.remote
+      ? [...section(null, "This computer", local), ...section("build-server", "build-server", all.filter((r) => r.w.machine))]
+      : local.length ? local.map(draw) : [h_flex().id("machine-new-local").h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")];
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
+        .when(!collapsed, el => el.child("Spaces"))
+        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+      .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always").children(children));
+  }
+
   render() {
+    if (storybook("spaces-tree")) return this.renderMock(storybook("spaces-tree"));
+    this.mock = false;
     const t = theme();
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
