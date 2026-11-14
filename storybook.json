@@ -53,6 +53,20 @@
       "default": "some"
     },
     {
+      "key": "mismatch",
+      "label": "space.folder と実際のフォルダが違う",
+      "about": "作った場所と、中の端末のいるフォルダがずれる。セッションが cd しても space は動かない",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "case",
+      "label": "大文字小文字だけ違うフォルダ",
+      "about": "ローカルでは同じフォルダとして1行にまとめる(件数バッジ)",
+      "kind": "switch",
+      "default": false
+    },
+    {
       "key": "parent",
       "label": "親フォルダも space を持つ",
       "about": "左の矢印で開閉、行本体で space を開く",

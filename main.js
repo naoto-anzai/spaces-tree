@@ -21,9 +21,13 @@ const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 // `ps`: panes(), read once by the caller (each read copies every pane).
+// First tab first: the first pane there with a live folder, else where it was made.
 function place(s, ps) {
-  const tabs = new Set((s.tabs ?? []).map((c) => c.id));
-  return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
+  for (const c of s.tabs ?? []) {
+    const p = ps.find((x) => x.tab === c.id && x.cwd);
+    if (p) return p.cwd;
+  }
+  return s.folder;
 }
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 // Indent per folder level (the files mod uses 18).
@@ -51,14 +55,14 @@ export function tone(t, status) {
 
 // ---- Storybook のモック(storybook.json と一対一。構造を変えたら両方直す) ----
 // 本番データ関数(spaces など)は使わない。mock.js に分けない(CLAUDE.md 参照)。
-const DEFAULTS = { folders: "few", sessions: "some", parent: false, dup: false, closed: false, hover: false, remote: false, narrow: false };
+const DEFAULTS = { folders: "few", sessions: "some", mismatch: false, case: false, parent: false, dup: false, closed: false, hover: false, remote: false, narrow: false };
 
 const MOCK = {
   home: "/mock/home",
   folders: {
     empty: [],
     one: ["Projects/herdr"],
-    few: ["work/app", "work/api", "notes"],
+    few: ["Work/app", "Work/api", "notes"],
     many: ["Projects/herdr-mods/spaces-tree", "Projects/herdr-mods/launcher", "Projects/herdr-mods/github", "research/survey", "research/crest", "work/app", "work/api", "work/docs", "tmp/scratch", "dotfiles"],
     long: ["a-very-long-parent-folder-name/a-really-long-folder-name-that-overflows-the-row", "日本語のとても長い親フォルダ名/テスト用のフォルダ", "x"],
   },
@@ -73,14 +77,19 @@ const MOCK = {
     const paths = [...base, ...(sb.parent ? Object.keys(dirs).filter((d) => dirs[d] >= 2) : [])];
     const list = [...paths.map((f) => ({ f: `${this.home}/${f}`, m: null })), ...(sb.remote ? this.remote.map((f) => ({ f, m: "build-server" })) : [])];
     if (sb.dup && list.length) list.push({ ...list[0], dup: true });
+    if (sb.case && list.length) list.push({ ...list[0], lower: true }); // 大文字小文字だけ違う同じフォルダ
     const sp = [], ps = [], git = {};
     list.forEach((e, i) => {
       const id = `mock-${i}`;
+      const cwd = e.lower ? e.f.toLowerCase() : e.f;
+      // space.folder は作った場所。mismatch では実際のフォルダの1つ上(セッションは cd で別の場所へ)
+      const made = sb.mismatch && !e.m && i < 2 ? e.f.split("/").slice(0, -1).join("/") : cwd;
       const n = sb.sessions === "none" ? 0 : sb.sessions === "some" ? (i % 2 === 0 ? 1 : 0) : (i % 3) + 1;
       const states = Array.from({ length: n }, (_, k) => this.states[sb.sessions === "some" ? (i % 4 === 0 ? 0 : 3) : (i + k) % 4]);
       const top = ["blocked", "done", "working", "idle"].find((s) => states.includes(s)) ?? null;
-      sp.push({ id, name: e.f.split("/").pop(), named: false, folder: e.f, machine: e.m, branch: null, active: false, status: top, tabs: [{ id: `t-${id}` }] });
-      states.forEach((st, k) => ps.push({ pane: `${id}-p${k}`, terminal: `${id}-x${k}`, tab: `t-${id}`, title: this.titles[(i + k) % 4], cwd: e.f, status: st, program: { agent: true, shell: false, name: "Claude Code" } }));
+      sp.push({ id, name: e.f.split("/").pop(), named: false, folder: made, machine: e.m, branch: null, active: false, status: top, tabs: [{ id: `t-${id}` }] });
+      ps.push({ pane: `${id}-sh`, terminal: `${id}-sx`, tab: `t-${id}`, title: "zsh", cwd, status: null, program: { agent: false, shell: true, name: "zsh" } });
+      states.forEach((st, k) => ps.push({ pane: `${id}-p${k}`, terminal: `${id}-x${k}`, tab: `t-${id}`, title: this.titles[(i + k) % 4], cwd: sb.mismatch && i === 0 ? `${this.home}/elsewhere` : cwd, status: st, program: { agent: true, shell: false, name: "Claude Code" } }));
       if (i % 3 !== 2) git[id] = { name: e.f.split("/").pop(), branch: ["main", "dev", "feature/tree"][i % 3], ahead: i % 3, behind: i % 2, repo: `${id}`, linked: false };
     });
     return { sp, ps, git, home: this.home };
@@ -97,21 +106,28 @@ const top = (list) => list.filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0] 
 function treeRows({ sp, ps, home: homeDir, closed }) {
   const userHome = (homeDir ?? "").replace(/\/+$/, "");
   const tries = new Map(); // machine|kind -> root
+  // Folders compare without a trailing "/", and on this computer without case (macOS);
+  // the path shown keeps its first spelling. `id` is the comparable form.
+  const low = (m, x) => (m === null ? x.toLowerCase() : x);
   const root = (m, kind, path) => {
     const k = `${m ?? ""}|${kind}`;
-    if (!tries.has(k)) tries.set(k, { label: kind === "home" ? "~" : "/", path, machine: m, spaces: [], kids: new Map(), root: true });
+    if (!tries.has(k)) tries.set(k, { label: kind === "home" ? "~" : "/", path, id: low(m, path), machine: m, spaces: [], kids: new Map(), root: true });
     return tries.get(k);
   };
   for (const s of sp) {
     const m = s.machine ?? null;
-    const folder = (s.folder || place(s, ps) || "").replace(/\/+$/, "");
-    const inHome = !folder || (m === null && userHome && (folder === userHome || folder.startsWith(`${userHome}/`)));
+    const folder = (place(s, ps) || s.folder || "").replace(/\/+$/, "");
+    const inHome = !folder || (m === null && userHome && (low(m, folder) === low(m, userHome) || low(m, folder).startsWith(`${low(m, userHome)}/`)));
     const baseDir = inHome ? (folder ? userHome : "") : "";
     const parts = (inHome ? folder.slice(userHome.length) : folder).split("/").filter(Boolean);
     let node = root(m, inHome ? "home" : "abs", baseDir);
     parts.forEach((part, i) => {
-      if (!node.kids.has(part)) node.kids.set(part, { label: part, path: `${baseDir}/${parts.slice(0, i + 1).join("/")}`, machine: m, spaces: [], kids: new Map() });
-      node = node.kids.get(part);
+      const k = low(m, part);
+      if (!node.kids.has(k)) {
+        const path = `${baseDir}/${parts.slice(0, i + 1).join("/")}`;
+        node.kids.set(k, { label: part, path, id: low(m, path), machine: m, spaces: [], kids: new Map() });
+      }
+      node = node.kids.get(k);
     });
     node.spaces.push(s);
   }
@@ -131,7 +147,7 @@ function treeRows({ sp, ps, home: homeDir, closed }) {
   const rows = [];
   const emit = (n, depth) => {
     const kids = [...n.kids.values()].map(squash).sort((a, b) => a.label.localeCompare(b.label));
-    const key = `${n.machine ?? ""}|${n.path}`;
+    const key = `${n.machine ?? ""}|${n.id}`;
     const own = sessions(n);
     const open = !closed.has(key);
     const row = { kind: "node", node: n, key, depth, hasKids: kids.length > 0, open, sessions: own, w: { machine: n.machine, id: key } };
@@ -362,6 +378,14 @@ export default class Spaces extends View {
     else run("space.new", { folder: node.path, machine: node.machine ?? "" });
   }
 
+  // This computer: the launcher (a space starts from a folder, not an empty shell).
+  // Another machine: the launcher is local only, so it is still space.new there.
+  newSpace(machine) {
+    if (this.mock) return;
+    if (machine) run("space.new", { machine });
+    else run("mod.open", { name: "launcher" });
+  }
+
   toggle(key, cx) {
     const set = this.mock ? this.mockClosed : this.closed;
     set.has(key) ? set.delete(key) : set.add(key);
@@ -414,12 +438,12 @@ export default class Spaces extends View {
               .on_click((_e, cx) => { cx.stop_propagation(); this.reconnect(machine, cx); })
               .child(repair?.busy ? "Connecting…" : "Connect"))))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
-            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.newSpace(m); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).gap(7).items_center().rounded(7)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
-        .on_click(() => run("space.new", { machine: m ?? "" }))
+        .on_click(() => this.newSpace(m))
         .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
       if (!collapsed && rebuilt) return [head];
       return [head, ...(folded ? [] : mine.length ? this.flat(mine, collapsed, draw) : [loading(m) ? loadingRow(m) : empty])];
@@ -540,7 +564,7 @@ export default class Spaces extends View {
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => { if (!this.mock) run("space.new"); }).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+          .on_click(() => { if (!this.mock) run("mod.open", { name: "launcher" }); }).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().id("spaces-tree-list").flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always").children(children));
   }
 
