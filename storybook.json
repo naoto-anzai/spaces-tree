@@ -3,33 +3,94 @@
   "props": {},
   "states": [
     {
-      "key": "spaces",
-      "label": "space の数・内容",
-      "about": "worktree の入れ子や git 情報つき",
+      "key": "folders",
+      "label": "フォルダ(space)の数・内容",
+      "about": "フォルダ木。1フォルダ=1 space",
       "kind": "radio",
       "options": [
-        { "value": "empty", "label": "空" },
-        { "value": "one", "label": "1件" },
-        { "value": "few", "label": "少数" },
-        { "value": "many", "label": "多数(複数フォルダ)" },
-        { "value": "long", "label": "長い名前・ブランチ" }
+        {
+          "value": "empty",
+          "label": "空"
+        },
+        {
+          "value": "one",
+          "label": "1件"
+        },
+        {
+          "value": "few",
+          "label": "少数"
+        },
+        {
+          "value": "many",
+          "label": "多数(入れ子)"
+        },
+        {
+          "value": "long",
+          "label": "長い名前"
+        }
       ],
       "default": "few"
     },
     {
-      "key": "status",
-      "label": "状態",
+      "key": "sessions",
+      "label": "セッション",
+      "about": "ホバー中か選択中のフォルダだけ一覧、他は件数のみ",
       "kind": "radio",
       "options": [
-        { "value": "mixed", "label": "混在" },
-        { "value": "calm", "label": "すべて idle" },
-        { "value": "blocked", "label": "各グループに blocked" }
+        {
+          "value": "none",
+          "label": "なし"
+        },
+        {
+          "value": "some",
+          "label": "一部のフォルダに1つ"
+        },
+        {
+          "value": "mixed",
+          "label": "複数(blocked / done 混在)"
+        }
       ],
-      "default": "mixed"
+      "default": "some"
     },
-    { "key": "grouped", "label": "フォルダ見出しでまとめる", "kind": "switch", "default": true },
-    { "key": "folded", "label": "グループを折りたたむ", "about": "見出しに最も緊急な状態が出る", "kind": "switch", "default": false },
-    { "key": "remote", "label": "リモートマシンあり", "kind": "switch", "default": false },
-    { "key": "narrow", "label": "幅の狭いレール表示", "kind": "switch", "default": false }
+    {
+      "key": "parent",
+      "label": "親フォルダも space を持つ",
+      "about": "左の矢印で開閉、行本体で space を開く",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "dup",
+      "label": "同じフォルダに space が複数",
+      "about": "件数バッジで1行にまとめる",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "closed",
+      "label": "サブフォルダを閉じる",
+      "about": "閉じた行に最も緊急な状態が出る",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "hover",
+      "label": "ホバー中の表示",
+      "about": "先頭のセッションありフォルダにポインタがある状態(セッション一覧と + が出る)",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "remote",
+      "label": "リモートマシンあり",
+      "kind": "switch",
+      "default": false
+    },
+    {
+      "key": "narrow",
+      "label": "幅の狭いレール表示",
+      "kind": "switch",
+      "default": false
+    }
   ]
 }

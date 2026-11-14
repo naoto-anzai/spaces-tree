@@ -1,11 +1,11 @@
-// Workspace spaces: stable colored avatars, worktrees under their checkout,
-// grouped by machine when more than one is known. After a space's name, the repo
-// its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
-// switch, right-click for its menu, drag to reorder.
+// Spaces as a folder tree (one space per folder, many sessions per folder), grouped by
+// machine when more than one is known. Look follows the files mod. A folder with
+// subfolders and a space of its own opens the space from its row and folds from the chevron on the left.
+// Order is decided here (alphabetical): spaces are never moved.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, home, spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { props, home, spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -25,148 +25,22 @@ function place(s, ps) {
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
   return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
 }
-const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
+// Indent per folder level (the files mod uses 18).
+const STEP = 8;
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
 
-// What a stored color name looks like on an avatar (the same in every mod
-// that draws space avatars): one strong color per hue, light and dark alike.
-const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
-
 // A space speaks up only when something in it needs you.
-// ---- Storybook のモックデータ(旧 mock.js。アプリのフォルダ外へ解決する import は拒否されるため同居) ----
-// storybook.json の状態と一対一。構造を変えたら storybook.json も同時に直すこと。
-// 本番データ関数(spaces など)は使わない。
-
-const repo = (name) => JSON.stringify([null, `/mock/${name}/.git`]);
-const git = (name, branch = "main", ahead = 0, behind = 0, linked = false) => ({ name, branch, ahead, behind, repo: repo(name), linked });
-
-// 1 ブロック = 親フォルダ 1 つ。items の各要素が top-level の space、kids が worktree。
-// block.folder は同じフォルダの space が 2 件以上のときの見出し名。
-const sp = (name, status, g, color, kids = []) => ({ name, status, g, color, kids });
-
-const SETS = {
-  empty: { local: [], remote: [] },
-  one: {
-    local: [{ folder: "Projects", items: [sp("herdr", "idle", git("herdr"), "ansi6")] }],
-    remote: [],
-  },
-  few: {
-    local: [
-      {
-        folder: "herdr-mods",
-        items: [
-          sp("spaces-tree", "working", git("spaces-tree", "feature/tree", 2, 0), "ansi5", [
-            sp("tree-fix", "idle", git("spaces-tree", "tree-fix", 0, 1, true)),
-            sp("tree-ui", "done", git("spaces-tree", "tree-ui", 3, 0, true)),
-          ]),
-          sp("launcher", "idle", git("launcher"), "ansi3"),
-        ],
-      },
-      { folder: "notes", items: [sp("notes", "idle", null, "ansi2")] },
-    ],
-    remote: [],
-  },
-  many: {
-    local: [
-      {
-        folder: "herdr-mods",
-        items: ["spaces-tree", "launcher", "github", "machine-login", "ModsStoryBook"].map((n, i) =>
-          sp(n, ["working", "idle", "done", "idle", "blocked"][i], git(n, i % 2 ? "main" : "dev", i, i % 3), ["ansi5", "ansi3", "ansi4", "ansi2", "ansi1"][i])),
-      },
-      {
-        folder: "research",
-        items: ["survey", "crest", "zemi", "peer-review"].map((n, i) =>
-          sp(n, ["idle", "working", "idle", "done"][i], git(n), ["ansi6", "ansi3", "ansi4", "ansi5"][i])),
-      },
-      {
-        folder: "work",
-        items: [
-          sp("app", "working", git("app", "main", 1, 0), "ansi2", [
-            sp("app-a", "working", git("app", "feat-a", 4, 0, true)),
-            sp("app-b", "blocked", git("app", "feat-b", 0, 2, true)),
-            sp("app-c", "idle", git("app", "feat-c", 0, 0, true)),
-          ]),
-          sp("api", "idle", git("api"), "ansi1"),
-          sp("docs", "idle", git("docs"), "ansi6"),
-        ],
-      },
-      { folder: "tmp", items: [sp("scratch", "idle", null, "ansi4")] },
-      { folder: "tmp2", items: [sp("playground", "idle", git("playground", "wip"), "ansi3")] },
-    ],
-    remote: [],
-  },
-  long: {
-    local: [
-      {
-        folder: "a-very-long-parent-folder-name-for-grouping",
-        items: [
-          sp("a-really-long-space-name-that-overflows-the-row", "working", git("a-really-long-space-name-that-overflows-the-row", "feature/some-extremely-long-branch-name", 12, 34), "ansi5", [
-            sp("feature-some-extremely-long-worktree-branch-name", "blocked", git("a-really-long-space-name-that-overflows-the-row", "feature-some-extremely-long-worktree-branch-name", 120, 0, true)),
-          ]),
-          sp("日本語のとても長いスペース名のテスト表示", "idle", git("nihongo", "ブランチ"), "ansi1"),
-        ],
-      },
-      { folder: "x", items: [sp("a", "idle", null, "ansi6")] },
-    ],
-    remote: [],
-  },
-};
-
-const REMOTE_SETS = {
-  few: [sp("build-server", "working", git("build-server", "main", 0, 3), "ansi4"), sp("gpu-box", "idle", git("gpu-box"), "ansi2")],
-};
-
-const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
-
-// status 状態: mixed = そのまま / calm = すべて idle / blocked = 各ブロックの先頭を blocked
-function restatus(item, mode, first) {
-  const s = mode === "calm" ? "idle" : mode === "blocked" && first ? "blocked" : item.status;
-  return s;
-}
-
-// 本番の ordered() が返す行と同じ形: { head, w } / { w, i, g, tree, depth, group }
-function mockRows(sb, machine = null) {
-  const set = SETS[sb.spaces ?? "few"] ?? SETS.few;
-  const mode = sb.status ?? "mixed";
-  const grouped = sb.grouped ?? true;
-  const blocks = machine ? [{ folder: null, items: REMOTE_SETS[sb.spaces] ?? (sb.spaces === "empty" ? [] : REMOTE_SETS.few) }] : set.local;
-  const rows = [];
-  let n = 0;
-  const all = sb.foldedKeys === "all";
-  const folded = new Set(all ? [] : sb.foldedKeys ?? []);
-  blocks.forEach((b, bi) => {
-    const grp = grouped && b.folder && b.items.length >= 2 ? `mock|${b.folder}` : null;
-    const make = (item, tree, first) => ({
-      w: { id: `mock-${machine ?? "local"}-${n++}`, name: item.name, status: restatus(item, mode, first), color: item.color ?? "ansi6", machine },
-      g: item.g, tree, depth: grp ? 1 : 0, group: grp,
-    });
-    const part = [];
-    b.items.forEach((item, ii) => {
-      part.push(make(item, null, ii === 0));
-      item.kids.forEach((k, ki) => part.push(make(k, ki === item.kids.length - 1 ? "└─" : "├─", false)));
-    });
-    if (grp) {
-      rows.push({ head: { key: grp, name: b.folder, ids: part.map((r) => r.w) }, w: { id: `group:${grp}`, machine } });
-      if (!all && !folded.has(grp)) rows.push(...part);
-    } else rows.push(...part);
-  });
-  return rows.map((r, i) => (r.head ? r : { ...r, i }));
-}
-
-function topStatus(ids) {
-  return ids.map((w) => w.status).sort((a, b) => RANK[b] - RANK[a])[0];
-}
-
 // モック中(Story が開いたプレビュー)は選択値、本番なら null
 export function storybook(mod) {
   const id = props()?.storybook;
   return id ? (shared(`storybook:${mod}:${id}`)?.values ?? {}) : null;
 }
 
+// A space speaks up only when something in it needs you.
 export function glyph(status) {
   return status === "blocked" || status === "done" ? "●" : "·";
 }
@@ -175,8 +49,107 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
-// storybook.json の default と同じ値
-const DEFAULTS = { spaces: "few", status: "mixed", grouped: true, folded: false, remote: false, narrow: false };
+// ---- Storybook のモック(storybook.json と一対一。構造を変えたら両方直す) ----
+// 本番データ関数(spaces など)は使わない。mock.js に分けない(CLAUDE.md 参照)。
+const DEFAULTS = { folders: "few", sessions: "some", parent: false, dup: false, closed: false, hover: false, remote: false, narrow: false };
+
+const MOCK = {
+  home: "/mock/home",
+  folders: {
+    empty: [],
+    one: ["Projects/herdr"],
+    few: ["work/app", "work/api", "notes"],
+    many: ["Projects/herdr-mods/spaces-tree", "Projects/herdr-mods/launcher", "Projects/herdr-mods/github", "research/survey", "research/crest", "work/app", "work/api", "work/docs", "tmp/scratch", "dotfiles"],
+    long: ["a-very-long-parent-folder-name/a-really-long-folder-name-that-overflows-the-row", "日本語のとても長い親フォルダ名/テスト用のフォルダ", "x"],
+  },
+  remote: ["/srv/build/app", "/srv/build/gpu"],
+  titles: ["refactor tree", "fix flaky tests", "write docs", "review PR"],
+  states: ["working", "blocked", "done", "idle"],
+  // folders: {sp, ps, git} を本番と同じ形で返す
+  data(sb) {
+    const base = this.folders[sb.folders] ?? this.folders.few;
+    const dirs = {};
+    for (const f of base) { const d = f.split("/").slice(0, -1).join("/"); if (d) dirs[d] = (dirs[d] ?? 0) + 1; }
+    const paths = [...base, ...(sb.parent ? Object.keys(dirs).filter((d) => dirs[d] >= 2) : [])];
+    const list = [...paths.map((f) => ({ f: `${this.home}/${f}`, m: null })), ...(sb.remote ? this.remote.map((f) => ({ f, m: "build-server" })) : [])];
+    if (sb.dup && list.length) list.push({ ...list[0], dup: true });
+    const sp = [], ps = [], git = {};
+    list.forEach((e, i) => {
+      const id = `mock-${i}`;
+      const n = sb.sessions === "none" ? 0 : sb.sessions === "some" ? (i % 2 === 0 ? 1 : 0) : (i % 3) + 1;
+      const states = Array.from({ length: n }, (_, k) => this.states[sb.sessions === "some" ? (i % 4 === 0 ? 0 : 3) : (i + k) % 4]);
+      const top = ["blocked", "done", "working", "idle"].find((s) => states.includes(s)) ?? null;
+      sp.push({ id, name: e.f.split("/").pop(), named: false, folder: e.f, machine: e.m, branch: null, active: false, status: top, tabs: [{ id: `t-${id}` }] });
+      states.forEach((st, k) => ps.push({ pane: `${id}-p${k}`, terminal: `${id}-x${k}`, tab: `t-${id}`, title: this.titles[(i + k) % 4], cwd: e.f, status: st, program: { agent: true, shell: false, name: "Claude Code" } }));
+      if (i % 3 !== 2) git[id] = { name: e.f.split("/").pop(), branch: ["main", "dev", "feature/tree"][i % 3], ahead: i % 3, behind: i % 2, repo: `${id}`, linked: false };
+    });
+    return { sp, ps, git, home: this.home };
+  },
+};
+
+
+const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+const top = (list) => list.filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0] ?? null;
+
+// Folder tree from spaces: { sp, ps, git(space) -> info, home, closed:Set }. Rows are the
+// nodes (and their sessions) in display order; a folder without a space of its own and
+// with one child merges into it ("a/b").
+function treeRows({ sp, ps, home: homeDir, closed }) {
+  const userHome = (homeDir ?? "").replace(/\/+$/, "");
+  const tries = new Map(); // machine|kind -> root
+  const root = (m, kind, path) => {
+    const k = `${m ?? ""}|${kind}`;
+    if (!tries.has(k)) tries.set(k, { label: kind === "home" ? "~" : "/", path, machine: m, spaces: [], kids: new Map(), root: true });
+    return tries.get(k);
+  };
+  for (const s of sp) {
+    const m = s.machine ?? null;
+    const folder = (s.folder || place(s, ps) || "").replace(/\/+$/, "");
+    const inHome = !folder || (m === null && userHome && (folder === userHome || folder.startsWith(`${userHome}/`)));
+    const baseDir = inHome ? (folder ? userHome : "") : "";
+    const parts = (inHome ? folder.slice(userHome.length) : folder).split("/").filter(Boolean);
+    let node = root(m, inHome ? "home" : "abs", baseDir);
+    parts.forEach((part, i) => {
+      if (!node.kids.has(part)) node.kids.set(part, { label: part, path: `${baseDir}/${parts.slice(0, i + 1).join("/")}`, machine: m, spaces: [], kids: new Map() });
+      node = node.kids.get(part);
+    });
+    node.spaces.push(s);
+  }
+  const squash = (n) => {
+    for (const [k, c] of n.kids) n.kids.set(k, squash(c));
+    while (!n.spaces.length && n.kids.size === 1 && !n.root) {
+      const [c] = n.kids.values();
+      n = { ...c, label: `${n.label}/${c.label}` };
+    }
+    return n;
+  };
+  const sessions = (n) => {
+    const out = [];
+    for (const s of n.spaces) for (const t of s.tabs ?? []) for (const p of ps) if (p.tab === t.id && p.terminal && (p.program?.agent || p.status)) out.push({ pane: p.pane, terminal: p.terminal, space: s.id, title: p.title || p.program?.name || "agent", status: p.status ?? "idle" });
+    return out;
+  };
+  const rows = [];
+  const emit = (n, depth) => {
+    const kids = [...n.kids.values()].map(squash).sort((a, b) => a.label.localeCompare(b.label));
+    const key = `${n.machine ?? ""}|${n.path}`;
+    const own = sessions(n);
+    const open = !closed.has(key);
+    const row = { kind: "node", node: n, key, depth, hasKids: kids.length > 0, open, sessions: own, w: { machine: n.machine, id: key } };
+    rows.push(row);
+    if (open) kids.forEach((k) => emit(k, depth + 1));
+    // The most urgent state in the folder, hidden subfolders included.
+    const below = [];
+    const gather = (c) => { below.push(...c.spaces.map((s) => s.status), ...sessions(c).map((x) => x.status)); c.kids.forEach((g) => gather(g)); };
+    gather({ ...n, kids: new Map(kids.map((k) => [k.label, k])) });
+    row.top = top(below);
+  };
+  for (const r of tries.values()) {
+    const kids = [...r.kids.values()].map(squash).sort((a, b) => a.label.localeCompare(b.label));
+    if (r.spaces.length) emit({ ...r, kids: new Map(kids.map((k) => [k.label, k])) }, 0);
+    else kids.forEach((k) => emit(k, 0));
+  }
+  return rows;
+}
 
 export default class Spaces extends View {
   init(_props, cx) {
@@ -188,19 +161,14 @@ export default class Spaces extends View {
     this.ready = {}; // machine -> its layout was readable at the last look
     this.at = {}; // space -> its where() at the last look
     this.watching = new Set(); // local repos' git folders
-    // Spaces made while this runs wait (at most a moment) for their git, so a
-    // worktree appears under its repo instead of jumping there.
-    this.shown = storybook("spaces-tree") ? null : new Set(spaces().map((s) => s.id));
     this.mock = false;
+    this.hoverKey = null; // the folder under the pointer (its sessions and + show)
     this.mockActive = null;
-    this.mockFolded = new Set();
-    this.born = {};
-    this.pressed = null;
-    this.over = null;
+    this.mockClosed = new Set();
     this.machines = [];
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
-    this.foldedGroups = new Set(JSON.parse(localStorage.getItem("groups.folded") ?? "[]"));
+    this.closed = new Set(JSON.parse(localStorage.getItem("tree.closed") ?? "[]"));
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
@@ -211,13 +179,8 @@ export default class Spaces extends View {
 
   checkNew(cx) {
     if (storybook("spaces-tree")) return;
-    this.shown ??= new Set(spaces().map((s) => s.id));
-    const now = Date.now();
-    const sp = spaces();
-    for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
-    const due = this.due(now, sp, panes());
+    const due = this.due(Date.now(), spaces(), panes());
     if (due.size) this.refreshGit(due, cx);
-    if (sp.some((s) => !this.shown.has(s.id)) || this.orderingDue(now)) cx.notify();
   }
 
   // Places whose git could have changed: new ones (a new space, a cd), where a
@@ -385,105 +348,46 @@ export default class Spaces extends View {
     });
   }
 
+
   menu(w) {
     // A popup is as tall as its items; height is only the most.
     openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
   }
 
-  orderingDue(now) {
-    return this.ordering && now - this.ordering.at >= 1000
-      && this.ordering.machines.every(name => machines().some(m => m.name === name && m.layout === "ready"));
+  // Open a folder's space (the shown one when several), or make one there.
+  open(node) {
+    if (this.mock) { this.mockActive = (node.spaces.find((s) => s.active) ?? node.spaces[0])?.id ?? this.mockActive; return; }
+    const s = node.spaces.find((x) => x.active) ?? node.spaces[0];
+    if (s) run("space.select", { id: s.id });
+    else run("space.new", { folder: node.path, machine: node.machine ?? "" });
   }
 
-  // Spaces in order, each worktree space moved under its main checkout's.
-  ordered() {
-    this.shown ??= new Set(spaces().map((s) => s.id));
-    const sp = spaces(), ps = panes();
-    const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
-    for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
-    const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null }));
-    const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
-    const nested = (r) => r.g?.linked && mains.has(r.g.repo);
-    const out = [];
-    const placed = new Set(); // repos whose worktrees are listed (under the first of its spaces)
-    for (const r of list) {
-      if (nested(r)) continue;
-      out.push({ ...r, tree: null });
-      if (!r.g || r.g.linked || placed.has(r.g.repo)) continue;
-      placed.add(r.g.repo);
-      const kids = list.filter((k) => nested(k) && k.g.repo === r.g.repo);
-      kids.forEach((k, n) => out.push({ ...k, tree: n === kids.length - 1 ? "└─" : "├─" }));
-    }
-    // Folder groups: top-level spaces (with their worktree kids) sharing a parent folder
-    // (2 or more, not home or "/") sit together under one heading.
-    const userHome = (home() ?? "").replace(/\/+$/, "").toLowerCase();
-    const parentOf = (r) => {
-      const p = place(r.w, ps);
-      if (!p || r.g?.linked) return null;
-      const dir = p.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
-      return dir && dir.toLowerCase() !== userHome ? `${r.w.machine ?? ""}|${dir.toLowerCase()}|${base(dir)}` : null;
-    };
-    const blocks = [];
-    for (const r of out) { if (r.tree) blocks[blocks.length - 1].push(r); else blocks.push([r]); }
-    const members = new Map();
-    for (const b of blocks) { const k = parentOf(b[0]); if (k) members.set(k, [...(members.get(k) ?? []), b]); }
-    const grouped = [];
-    const emitted = new Set();
-    for (const b of blocks) {
-      const k = parentOf(b[0]);
-      if (!k || members.get(k).length < 2) { grouped.push({ block: b }); continue; }
-      if (emitted.has(k)) continue;
-      emitted.add(k);
-      grouped.push({ key: k, name: k.split("|")[2], blocks: members.get(k) });
-    }
-    out.length = 0;
-    const heads = new Map(); // first space id of a group -> its heading
-    for (const g of grouped) {
-      if (g.block) { out.push(...g.block); continue; }
-      const flat = g.blocks.flat();
-      heads.set(flat[0].w.id, { key: g.key, name: g.name, ids: flat.map((r) => r.w) });
-      out.push(...flat.map((r) => ({ ...r, depth: 1, group: g.key })));
-    }
-    // Simulate the batch so later indexes include earlier moves. An attempted
-    // write can lose a sync conflict: allow the echo to settle before retrying.
-    const order = sp.map(w => w.id);
-    const target = out.map(r => r.w.id);
-    const key = JSON.stringify([order, target, machines()]);
-    if (props()?.overlay || order.every((id, i) => id === target[i])) {
-      this.ordering = null;
-    } else if (this.ordering?.key !== key || this.orderingDue(Date.now())) {
-      const moved = new Set();
-      this.ordering = { key, at: Date.now(), machines: [] };
-      for (let i = 0; i < out.length; i++) {
-        const from = order.indexOf(out[i].w.id);
-        if (from === i) continue;
-        run("space.move", { id: out[i].w.id, index: i + 1 });
-        moved.add(out[i].w.machine ?? null);
-        order.splice(i, 0, order.splice(from, 1)[0]);
-      }
-      this.ordering.machines = [...moved];
-    }
-    const rows = [];
-    for (const r of out.filter(r => this.shown.has(r.w.id))) {
-      const h = heads.get(r.w.id);
-      if (h) rows.push({ head: h, w: { machine: r.w.machine ?? null, id: `group:${h.key}` } });
-      if (!r.group || !this.foldedGroups.has(r.group)) rows.push(r);
-    }
-    return rows;
+  toggle(key, cx) {
+    const set = this.mock ? this.mockClosed : this.closed;
+    set.has(key) ? set.delete(key) : set.add(key);
+    if (!this.mock) localStorage.setItem("tree.closed", JSON.stringify([...this.closed]));
+    cx.notify();
+  }
+
+  // The tree's rows for what is on screen now (real spaces, or the story's).
+  rows(view) {
+    return treeRows({ ...view, closed: this.mock ? this.mockClosed : this.closed });
   }
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered();
-    const draw = (r) => (r.head ? (collapsed ? div().h(1) : this.groupHead(r, t)) : collapsed ? this.compact(r, t) : this.row(r, t));
+    const ps = panes();
+    const sp = spaces();
+    const git = (s) => this.git[where(s, ps)] ?? null;
+    const rows = this.rows({ sp, ps, home: home() });
+    const draw = (r) => this.draw(r, t, collapsed, git);
     const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
-      return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
-        || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
+      return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"));
     };
     const loadingRow = m => div().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(8).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : rows.map(draw);
+    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : this.flat(rows, collapsed, draw);
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
@@ -518,19 +422,29 @@ export default class Spaces extends View {
         .on_click(() => run("space.new", { machine: m ?? "" }))
         .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
       if (!collapsed && rebuilt) return [head];
-      return [head, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : empty])];
+      return [head, ...(folded ? [] : mine.length ? this.flat(mine, collapsed, draw) : [loading(m) ? loadingRow(m) : empty])];
     });
   }
 
-  // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
-  // branch goes when the name already says it (a worktree is named after its branch),
-  // and master/main go: nearly every space is on one.
-  gitTail(g, tree, name, t) {
+  // On the rail: one numbered entry per folder that has a space.
+  flat(rows, collapsed, draw) {
+    if (!collapsed) return rows.map(draw);
+    return rows.filter((r) => r.kind === "node" && r.node.spaces.length).map(draw);
+  }
+
+  draw(r, t, collapsed, git) {
+    if (collapsed) return this.compact(r, t);
+    return this.node(r, t, git);
+  }
+
+  // Only what's unusual, after the name: "herdr · spike ↑2 ↓1". The repo or
+  // branch goes when the name already says it, and master/main go: nearly every folder is on one.
+  gitTail(g, name, t) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
     const branch = same(raw) || raw === "master" || raw === "main" ? "" : raw;
-    const repo = tree || same(g.name) ? "" : g.name;
-    const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
+    const repo = same(g.name) ? "" : g.name;
+    const where = [repo, branch].filter(Boolean).join(" · ");
     return h_flex()
       .flex_1()
       .min_w(0)
@@ -540,91 +454,74 @@ export default class Spaces extends View {
       .text_size(11.5)
       .text_color(t.dim)
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
-      .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
-      .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
+      .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`↑${g.ahead}`)))
+      .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`↓${g.behind}`)));
   }
 
-  groupHead({ head }, t) {
-    const set = this.mock ? this.mockFolded : this.foldedGroups;
-    const folded = this.mock && this.mockAll ? true : set.has(head.key);
-    const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
-    const live = this.mock ? [] : spaces();
-    const top = this.mock ? topStatus(head.ids) : head.ids.map((m) => live.find((x) => x.id === m.id)?.status).filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0];
-    return h_flex().id(`group-${head.key}`).h(26).flex_none().px(8).mt(4).gap(6).items_center().rounded(6)
-      .text_size(11).font_semibold().text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
-      .on_click((_e, cx) => {
-        folded ? set.delete(head.key) : set.add(head.key);
-        if (!this.mock) localStorage.setItem("groups.folded", JSON.stringify([...this.foldedGroups]));
-        cx.notify();
-      })
-      .child(div().w(10).flex_none().child(folded ? "\u25b8" : "\u25be"))
-      .child(div().flex_1().truncate().child(head.name))
-      .when(folded && Boolean(top) && top !== "idle", el => el.child(div().flex_none().text_color(tone(t, top)).child(glyph(top))))
-      .child(div().flex_none().text_color(t.dim).child(String(head.ids.length)));
-  }
-
-  row({ w, i, g, tree, depth }, t) {
-    const on = w.active;
-    const fromIndex = this.mock || this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
-    const colors = this.mock ? {} : shared("space.colors") ?? {};
-    const color = this.mock ? w.color : colors[w.id] ?? "ansi6";
-    const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
-    return v_flex()
-      .relative()
-      .id(`space-${w.id}`)
-      .px(8)
-      .when(Boolean(depth), el => el.ml(10).border_l(1).border_color(t.border))
-      .h(rowHeight({ tree }))
-      .flex_none()
-      .justify_center()
-      .rounded(8)
+  // A folder, drawn like the files mod's rows. The chevron (left only) folds; the rest of
+  // the row opens the folder's space, or folds when it has none.
+  node(r, t, git) {
+    const { node, depth, hasKids, open, key } = r;
+    const hasSpace = node.spaces.length > 0;
+    const on = node.spaces.some((s) => s.active);
+    const first = node.spaces.find((s) => s.active) ?? node.spaces[0];
+    const g = first ? git(first) : null;
+    const chevron = (n) => svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(n).flex_none().text_color(t.dim);
+    const main = h_flex().id(`node-${key}`).h(28).flex_none().pl(8 + depth * STEP).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
       .when(on, (el) => el.bg(t.selected))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
-      .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
-      .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
-        div().absolute().left(0).right(0).h(2).bg(t.accent)
-          .when(fromIndex < i, line => line.bottom(0))
-          .when(fromIndex > i, line => line.top(0)),
-      ))
-      .on_mouse_down("left", () => {
-        if (this.mock) return;
-        this.pressed = w.id;
-        this.over = w.id;
-      })
-      .on_mouse_move((_e, cx) => {
-        if (this.mock) return;
-        const source = spaces().find(s => s.id === this.pressed);
-        const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
-        if (this.pressed !== null && this.over !== over) {
-          this.over = over;
-          cx.notify();
-        }
-      })
-      .on_mouse_up("left", (_e, cx) => {
-        if (this.mock) { this.mockActive = w.id; cx.notify(); return; }
-        const from = this.pressed;
-        const over = this.over;
-        this.pressed = null;
-        this.over = null;
-        if (from !== null && over === w.id && from !== w.id) {
-          const index = spaces().findIndex(s => s.id === w.id);
-          if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+      .on_click((_e, cx) => (hasSpace ? this.open(node) : this.toggle(key, cx)))
+      .on_mouse_down("right", () => { if (!this.mock && first) this.menu(first); })
+      .child(hasKids
+        ? div().id(`toggle-${key}`).w(16).h(22).flex_none().flex().items_center().justify_center().rounded(4)
+          .hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.toggle(key, cx); })
+          .child(chevron(12))
+        : div().w(16).flex_none())
+      .child(svg("mods/files/folder.svg").size(14).flex_none().text_color(hasSpace ? t.foreground : t.muted))
+      .child(div().flex_shrink(0).max_w(150).truncate().text_color(hasSpace ? t.foreground : t.muted).child(node.label))
+      .when(node.spaces.length > 1, (el) => el.child(div().flex_none().px(5).rounded(8).bg(t.raised).text_size(10.5).text_color(t.dim).child(String(node.spaces.length))))
+      .child(g ? this.gitTail(g, node.label, t) : div().flex_1())
+      .when(!open && hasKids && (r.top === "blocked" || r.top === "done"), (el) => el.child(div().flex_none().text_color(tone(t, r.top)).child(glyph(r.top))))
+      // Sessions are listed only for the folder under the pointer or the shown one; the rest keep a count.
+      .when(r.sessions.length > 0 && !(this.hoverKey === key || on), (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(11).text_color(t.dim)
+        .child(div().size(6).rounded(3).bg(tone(t, top(r.sessions.map((x) => x.status)))))
+        .child(String(r.sessions.length))))
+      .when(this.hoverKey === key && Boolean(first), (el) => el.child(div().id(`add-${key}`).size(20).flex_none().flex().items_center().justify_center().rounded(5)
+        .text_color(t.dim).hover((s) => s.bg(t.raised).text_color(t.foreground))
+        .tooltip("New Claude session here")
+        .on_click((_e, cx) => { cx.stop_propagation(); if (!this.mock) run("tab.new", { space: first.id, folder: node.path, argv: ["claude"] }); })
+        .child(svg("mods/workspace-chrome/plus.svg").size(12))));
+    const sessions = r.sessions;
+    const shown = sessions.length > 0 && (this.hoverKey === key || on);
+    return v_flex().id(`block-${key}`).flex_none()
+      .on_hover((hovered, cx) => {
+        if (hovered) this.hoverKey = key;
+        else if (this.hoverKey === key) this.hoverKey = null;
         cx.notify();
       })
-      .on_mouse_down("right", () => { if (!this.mock) this.menu(w); })
-      .child(
-        h_flex()
-          .gap(9)
-          .items_center()
-          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
-          .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
-          .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
-      );
+      .child(main)
+      .when(shown, (el) => el.children(sessions.map((x) => this.session(x, depth + 1, t))));
   }
 
-  compact({ w, i }, t) {
+  // An agent session in the folder above it.
+  session(r, depth, t) {
+    return h_flex().id(`session-${r.pane}`).h(24).flex_none().pl(8 + depth * STEP + 23).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .text_size(12).text_color(t.muted)
+      .on_click(() => {
+        if (this.mock) return;
+        run("space.select", { id: r.space });
+        run("pane.focus", { terminal: r.terminal });
+      })
+      .child(div().w(6).h(6).rounded(3).flex_none().bg(tone(t, r.status)))
+      .child(div().flex_1().min_w(0).truncate().child(r.title));
+  }
+
+  compact(r, t) {
+    const sps = r.node.spaces;
+    const w = sps.find((s) => s.active) ?? sps[0];
+    const index = (this.mock ? [] : spaces()).findIndex((s) => s.id === w.id);
     return h_flex()
       .id(`space-${w.id}`)
       .h(26)
@@ -633,9 +530,18 @@ export default class Spaces extends View {
       .gap(4)
       .when(w.active, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { if (this.mock) { this.mockActive = w.id; cx.notify(); } else run("space.select", { id: w.id }); })
-      .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
-      .child(div().text_color(tone(t, w.status)).child(glyph(w.status)));
+      .on_click(() => this.open(r.node))
+      .child(div().text_color(w.active ? t.foreground : t.muted).child(String(index >= 0 ? index + 1 : "·")))
+      .child(div().text_color(tone(t, r.top ?? w.status)).child(glyph(r.top ?? w.status)));
+  }
+
+  frame(t, collapsed, children) {
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
+        .when(!collapsed, el => el.child("Spaces"))
+        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
+          .on_click(() => { if (!this.mock) run("space.new"); }).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+      .child(v_flex().id("spaces-tree-list").flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always").children(children));
   }
 
   // モック描画: 本番データ・コマンド・共有状態に触れない。
@@ -643,31 +549,28 @@ export default class Spaces extends View {
     const sb = { ...DEFAULTS, ...values };
     const t = theme();
     this.mock = true;
-    this.mockAll = !!sb.folded;
     const collapsed = !!sb.narrow;
-    const withState = { ...sb, foldedKeys: sb.folded ? "all" : [...this.mockFolded] };
-    const all = [...mockRows(withState), ...(sb.remote ? mockRows(withState, "build-server") : [])];
-    this.mockActive ??= all.find((r) => !r.head)?.w.id ?? null;
-    const draw = (r) => {
-      const x = r.head ? r : { ...r, w: { ...r.w, active: r.w.id === this.mockActive } };
-      return r.head ? (collapsed ? div().h(1) : this.groupHead(x, t)) : collapsed ? this.compact(x, t) : this.row(x, t);
-    };
-    const section = (m, label, rows) => [
+    const view = MOCK.data(sb);
+    this.mockActive ??= view.sp.find((s) => !s.machine)?.id ?? null;
+    view.sp.forEach((s) => { s.active = s.id === this.mockActive; });
+    // 折りたたみ: 展開状態の行から、サブフォルダを持つ行をすべて閉じて作り直す
+    let rows = treeRows({ ...view, closed: this.mockClosed });
+    if (sb.closed) rows = treeRows({ ...view, closed: new Set(rows.filter((r) => r.kind === "node" && r.hasKids).map((r) => r.key)) });
+    // ホバー表示の確認用: 先頭のセッションありフォルダをポインタ下にあるものとして扱う
+    if (sb.hover && !this.hoverKey) this.hoverKey = rows.find((r) => r.kind === "node" && r.sessions.length)?.key ?? null;
+    const draw = (r) => this.draw(r, t, collapsed, (s) => view.git[s.id] ?? null);
+    const section = (m, label, mine) => [
       h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 2 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .child(svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none())
         .when(!collapsed, el => el.child(div().flex_1().truncate().child(label)))
         .child(div().size(6).rounded(3).flex_none().bg(t.ansi2)),
-      ...(rows.length ? rows.map(draw) : [h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")]),
+      ...(mine.length ? this.flat(mine, collapsed, draw) : [h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")]),
     ];
-    const local = all.filter((r) => !r.w.machine);
+    const local = rows.filter((r) => !r.w.machine);
     const children = sb.remote
-      ? [...section(null, "This computer", local), ...section("build-server", "build-server", all.filter((r) => r.w.machine))]
-      : local.length ? local.map(draw) : [h_flex().id("machine-new-local").h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")];
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
-        .when(!collapsed, el => el.child("Spaces"))
-        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always").children(children));
+      ? [...section(null, "This computer", local), ...section("build-server", "build-server", rows.filter((r) => r.w.machine))]
+      : local.length ? this.flat(local, collapsed, draw) : [h_flex().id("machine-new-local").h(28).flex_none().px(8).items_center().rounded(7).text_size(12).text_color(t.dim).child(collapsed ? "+" : "New space there")];
+    return this.frame(t, collapsed, children);
   }
 
   render() {
@@ -675,25 +578,6 @@ export default class Spaces extends View {
     this.mock = false;
     const t = theme();
     const collapsed = narrow();
-    const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
-    const sp = spaces();
-    const ids = new Set(sp.map(p => p.id));
-    const kept = Object.fromEntries(Object.entries(shared("space.colors") ?? {}).filter(([id]) => ids.has(id)));
-    let changed = Object.keys(kept).length !== Object.keys(shared("space.colors") ?? {}).length;
-    for (const p of sp) {
-      if (kept[p.id] || p.name === "~") continue;
-      const uses = c => Object.values(kept).filter(v => v === c).length;
-      kept[p.id] = palette.reduce((best, c) => uses(c) < uses(best) ? c : best);
-      changed = true;
-    }
-    if (changed) setShared("space.colors", kept);
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
-        .when(!collapsed, el => el.child("Spaces"))
-        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
-        .children(this.grouped(t, collapsed)));
+    return this.frame(t, collapsed, this.grouped(t, collapsed));
   }
 }
