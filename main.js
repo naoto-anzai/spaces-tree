@@ -55,7 +55,7 @@ export function tone(t, status) {
 
 // ---- Storybook のモック(storybook.json と一対一。構造を変えたら両方直す) ----
 // 本番データ関数(spaces など)は使わない。mock.js に分けない(CLAUDE.md 参照)。
-const DEFAULTS = { folders: "few", sessions: "some", mismatch: false, case: false, parent: false, dup: false, closed: false, hover: false, remote: false, narrow: false };
+const DEFAULTS = { folders: "few", sessions: "some", mismatch: false, case: false, worktrees: true, parent: false, dup: false, closed: false, hover: false, remote: false, narrow: false };
 
 const MOCK = {
   home: "/mock/home",
@@ -78,7 +78,9 @@ const MOCK = {
     const list = [...paths.map((f) => ({ f: `${this.home}/${f}`, m: null })), ...(sb.remote ? this.remote.map((f) => ({ f, m: "build-server" })) : [])];
     if (sb.dup && list.length) list.push({ ...list[0], dup: true });
     if (sb.case && list.length) list.push({ ...list[0], lower: true }); // 大文字小文字だけ違う同じフォルダ
-    const sp = [], ps = [], git = {};
+    // worktree: 本体(i % 3 === 0 の git ありフォルダ)に紐づく worktree の space
+    if (sb.worktrees) list.slice().forEach((e, i) => { if (!e.m && !e.dup && !e.lower && i % 3 === 0) list.push({ f: `/mock/wt/${i}-a`, m: null, wtOf: i, branch: "feature/login" }); });
+    const sp = [], ps = [], git = {}, wts = {};
     list.forEach((e, i) => {
       const id = `mock-${i}`;
       const cwd = e.lower ? e.f.toLowerCase() : e.f;
@@ -90,9 +92,11 @@ const MOCK = {
       sp.push({ id, name: e.f.split("/").pop(), named: false, folder: made, machine: e.m, branch: null, active: false, status: top, tabs: [{ id: `t-${id}` }] });
       ps.push({ pane: `${id}-sh`, terminal: `${id}-sx`, tab: `t-${id}`, title: "zsh", cwd, status: null, program: { agent: false, shell: true, name: "zsh" } });
       states.forEach((st, k) => ps.push({ pane: `${id}-p${k}`, terminal: `${id}-x${k}`, tab: `t-${id}`, title: this.titles[(i + k) % 4], cwd: sb.mismatch && i === 0 ? `${this.home}/elsewhere` : cwd, status: st, program: { agent: true, shell: false, name: "Claude Code" } }));
-      if (i % 3 !== 2) git[id] = { name: e.f.split("/").pop(), branch: ["main", "dev", "feature/tree"][i % 3], ahead: i % 3, behind: i % 2, repo: `${id}`, linked: false };
+      if (sb.worktrees && i % 3 === 0 && e.wtOf === undefined) wts[id] = [{ branch: "fix/typo", path: `/mock/wt/${i}-b` }];
+      if (e.wtOf !== undefined) git[id] = { name: list[e.wtOf].f.split("/").pop(), branch: e.branch, ahead: 1, behind: 0, repo: `repo-${e.wtOf}`, linked: true };
+      else if (i % 3 !== 2) git[id] = { name: e.f.split("/").pop(), branch: ["main", "dev", "feature/tree"][i % 3], ahead: i % 3, behind: i % 2, repo: `repo-${i}`, linked: false };
     });
-    return { sp, ps, git, home: this.home };
+    return { sp, ps, git, wts, home: this.home };
   },
 };
 
@@ -103,7 +107,7 @@ const top = (list) => list.filter(Boolean).sort((a, b) => RANK[b] - RANK[a])[0] 
 // Folder tree from spaces: { sp, ps, git(space) -> info, home, closed:Set }. Rows are the
 // nodes (and their sessions) in display order; a folder without a space of its own and
 // with one child merges into it ("a/b").
-function treeRows({ sp, ps, home: homeDir, closed }) {
+function treeRows({ sp, ps, home: homeDir, closed, gitOf }) {
   const userHome = (homeDir ?? "").replace(/\/+$/, "");
   const tries = new Map(); // machine|kind -> root
   // Folders compare without a trailing "/", and on this computer without case (macOS);
@@ -114,7 +118,7 @@ function treeRows({ sp, ps, home: homeDir, closed }) {
     if (!tries.has(k)) tries.set(k, { label: kind === "home" ? "~" : "/", path, id: low(m, path), machine: m, spaces: [], kids: new Map(), root: true });
     return tries.get(k);
   };
-  for (const s of sp) {
+  const insert = (s) => {
     const m = s.machine ?? null;
     const folder = (place(s, ps) || s.folder || "").replace(/\/+$/, "");
     const inHome = !folder || (m === null && userHome && (low(m, folder) === low(m, userHome) || low(m, folder).startsWith(`${low(m, userHome)}/`)));
@@ -130,6 +134,22 @@ function treeRows({ sp, ps, home: homeDir, closed }) {
       node = node.kids.get(k);
     });
     node.spaces.push(s);
+    return node;
+  };
+  // A worktree space hangs on the space of its repo's own checkout (shown with it), not in
+  // the tree; with no such space it stays a folder of its own.
+  const repoOf = (s) => (gitOf ? gitOf(s) : null);
+  const mains = new Map(); // machine|repo -> the node of its own checkout
+  const keyOf = (s) => `${s.machine ?? ""}|${repoOf(s)?.repo}`;
+  for (const s of sp) {
+    if (repoOf(s)?.linked) continue;
+    const n = insert(s);
+    if (repoOf(s) && !mains.has(keyOf(s))) { n.wsp ??= []; mains.set(keyOf(s), n); }
+  }
+  for (const s of sp) {
+    if (!repoOf(s)?.linked) continue;
+    if (mains.has(keyOf(s))) mains.get(keyOf(s)).wsp.push(s);
+    else insert(s);
   }
   const squash = (n) => {
     for (const [k, c] of n.kids) n.kids.set(k, squash(c));
@@ -150,12 +170,12 @@ function treeRows({ sp, ps, home: homeDir, closed }) {
     const key = `${n.machine ?? ""}|${n.id}`;
     const own = sessions(n);
     const open = !closed.has(key);
-    const row = { kind: "node", node: n, key, depth, hasKids: kids.length > 0, open, sessions: own, w: { machine: n.machine, id: key } };
+    const row = { kind: "node", node: n, key, depth, hasKids: kids.length > 0, open, sessions: own, wsp: n.wsp ?? [], w: { machine: n.machine, id: key } };
     rows.push(row);
     if (open) kids.forEach((k) => emit(k, depth + 1));
     // The most urgent state in the folder, hidden subfolders included.
     const below = [];
-    const gather = (c) => { below.push(...c.spaces.map((s) => s.status), ...sessions(c).map((x) => x.status)); c.kids.forEach((g) => gather(g)); };
+    const gather = (c) => { below.push(...c.spaces.map((s) => s.status), ...(c.wsp ?? []).map((s) => s.status), ...sessions(c).map((x) => x.status)); c.kids.forEach((g) => gather(g)); };
     gather({ ...n, kids: new Map(kids.map((k) => [k.label, k])) });
     row.top = top(below);
   };
@@ -178,7 +198,11 @@ export default class Spaces extends View {
     this.at = {}; // space -> its where() at the last look
     this.watching = new Set(); // local repos' git folders
     this.mock = false;
-    this.hoverKey = null; // the folder under the pointer (its sessions and + show)
+    this.hoverKey = null; // the folder under the pointer (its sessions, worktrees and + show)
+    this.wts = {}; // repo -> { at, list: [{ path, branch }] } from git worktree list
+    this.wtBusy = new Set();
+    this.openIds = new Set(); // node keys that have a space (their worktrees are rows already)
+    this.mockWts = {};
     this.mockActive = null;
     this.mockClosed = new Set();
     this.machines = [];
@@ -378,6 +402,44 @@ export default class Spaces extends View {
     else run("space.new", { folder: node.path, machine: node.machine ?? "" });
   }
 
+  // Checkouts of the folder's repo (git worktree list), asked when the pointer comes: at most
+  // once per 30 s per repo.
+  loadWts(node, g, cx) {
+    const k = g.repo;
+    const c = this.wts[k];
+    if ((c && Date.now() - c.at < 30000) || this.wtBusy.has(k)) return;
+    const first = node.spaces[0];
+    if (!first) return;
+    this.wtBusy.add(k);
+    const cwd = place(first, panes());
+    cx.spawn(async (cx) => {
+      let list = c?.list ?? [];
+      try {
+        const r = await exec("git", ["--no-optional-locks", "worktree", "list", "--porcelain"], { cwd, on: node.machine });
+        if (r.code === 0) {
+          list = r.stdout.split("\n\n").map((blk) => {
+            const lines = blk.split("\n");
+            const path = lines.find((l) => l.startsWith("worktree "))?.slice(9);
+            const ref = lines.find((l) => l.startsWith("branch "))?.slice(7).replace(/^refs\/heads\//, "");
+            return path && !lines.includes("bare") ? { path, branch: ref ?? "(detached)" } : null;
+          }).filter(Boolean);
+        }
+      } catch {}
+      this.wts[k] = { at: Date.now(), list };
+      this.wtBusy.delete(k);
+      cx.notify();
+    });
+  }
+
+  // Checkouts that are neither this folder nor already a space of their own.
+  worktrees(node, g, first, wsp = []) {
+    if (this.mock) return this.mockWts[first.id] ?? [];
+    const m = node.machine ?? null;
+    const norm = (p) => (m === null ? p.toLowerCase() : p).replace(/\/+$/, "");
+    const used = new Set([place(first, panes()), ...wsp.map((w) => place(w, panes()))].filter(Boolean).map(norm));
+    return (this.wts[g.repo]?.list ?? []).filter((w) => !used.has(norm(w.path)) && !this.openIds.has(`${m ?? ""}|${norm(w.path)}`));
+  }
+
   // This computer: the launcher (a space starts from a folder, not an empty shell).
   // Another machine: the launcher is local only, so it is still space.new there.
   newSpace(machine) {
@@ -403,7 +465,8 @@ export default class Spaces extends View {
     const ps = panes();
     const sp = spaces();
     const git = (s) => this.git[where(s, ps)] ?? null;
-    const rows = this.rows({ sp, ps, home: home() });
+    const rows = this.rows({ sp, ps, home: home(), gitOf: git });
+    this.openIds = new Set(rows.filter((r) => r.kind === "node" && r.node.spaces.length).map((r) => r.key));
     const draw = (r) => this.draw(r, t, collapsed, git);
     const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
@@ -517,15 +580,60 @@ export default class Spaces extends View {
         .on_click((_e, cx) => { cx.stop_propagation(); if (!this.mock) run("tab.new", { space: first.id, folder: node.path, argv: ["claude"] }); })
         .child(svg("mods/workspace-chrome/plus.svg").size(12))));
     const sessions = r.sessions;
-    const shown = sessions.length > 0 && (this.hoverKey === key || on);
+    const hot = this.hoverKey === key;
+    const wsp = r.wsp ?? [];
+    const listed = hot || on;
+    const wtOn = wsp.some((x) => x.active);
+    const wts = hot && g && first ? this.worktrees(node, g, first, wsp) : [];
     return v_flex().id(`block-${key}`).flex_none()
       .on_hover((hovered, cx) => {
-        if (hovered) this.hoverKey = key;
-        else if (this.hoverKey === key) this.hoverKey = null;
+        if (hovered) {
+          this.hoverKey = key;
+          if (g && !this.mock) this.loadWts(node, g, cx);
+        } else if (this.hoverKey === key) this.hoverKey = null;
         cx.notify();
       })
       .child(main)
-      .when(shown, (el) => el.children(sessions.map((x) => this.session(x, depth + 1, t))));
+      .when(listed && sessions.length > 0, (el) => el.children(sessions.map((x) => this.session(x, depth + 1, t))))
+      // Worktrees of this repo, under its own checkout: the ones that are spaces (always while
+      // one is shown, else on hover), then checkouts with no space yet, then "New worktree".
+      .when((hot || wtOn) && wsp.length > 0, (el) => el.children(wsp.map((w) => this.worktreeSpace(w, git(w), depth + 1, t))))
+      .when(hot && Boolean(g && first), (el) => el.children([
+        ...wts.map((w) => this.worktree(w, node, depth + 1, t)),
+        this.worktreeNew(node, first, depth + 1, t),
+      ]));
+  }
+
+  // A worktree that is a space: branch icon, its branch, a state dot (sessions have only a dot).
+  worktreeSpace(w, g, depth, t) {
+    const status = w.status;
+    return h_flex().id(`wtsp-${w.id}`).h(24).flex_none().pl(8 + depth * STEP + 20).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      .when(w.active, (el) => el.bg(t.selected))
+      .when(!w.active, (el) => el.hover((s) => s.bg(t.hover)))
+      .text_size(12).text_color(t.foreground)
+      .on_click(() => { if (this.mock) this.mockActive = w.id; else run("space.select", { id: w.id }); })
+      .on_mouse_down("right", () => { if (!this.mock) this.menu(w); })
+      .child(svg("mods/workspace-chrome/branch.svg").size(12).flex_none().text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().child(g?.branch ?? w.name))
+      .when(Boolean(status) && status !== "idle", (el) => el.child(div().size(6).rounded(3).flex_none().bg(tone(t, status))));
+  }
+
+  // A checkout of the repo with no space yet: branch icon (sessions have a dot).
+  worktree(w, node, depth, t) {
+    return h_flex().id(`wt-${node.id}-${w.path}`).h(24).flex_none().pl(8 + depth * STEP + 20).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).text_size(12).text_color(t.dim)
+      .tooltip(w.path)
+      .on_click(() => { if (!this.mock) run("space.new", { folder: w.path, machine: node.machine ?? "" }); })
+      .child(svg("mods/workspace-chrome/branch.svg").size(12).flex_none())
+      .child(div().flex_1().min_w(0).truncate().child(w.branch));
+  }
+
+  worktreeNew(node, first, depth, t) {
+    return h_flex().id(`wt-new-${node.id}`).h(24).flex_none().pl(8 + depth * STEP + 20).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      .hover((s) => s.bg(t.hover).text_color(t.foreground)).text_size(12).text_color(t.dim)
+      .on_click(() => { if (!this.mock) openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { space: first.id, action: "new" } }); })
+      .child(svg("mods/workspace-chrome/plus.svg").size(12).flex_none())
+      .child(div().flex_1().min_w(0).truncate().child("New worktree"));
   }
 
   // An agent session in the folder above it.
@@ -575,6 +683,8 @@ export default class Spaces extends View {
     this.mock = true;
     const collapsed = !!sb.narrow;
     const view = MOCK.data(sb);
+    this.mockWts = view.wts;
+    view.gitOf = (s) => view.git[s.id] ?? null;
     this.mockActive ??= view.sp.find((s) => !s.machine)?.id ?? null;
     view.sp.forEach((s) => { s.active = s.id === this.mockActive; });
     // 折りたたみ: 展開状態の行から、サブフォルダを持つ行をすべて閉じて作り直す

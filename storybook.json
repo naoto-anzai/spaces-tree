@@ -67,6 +67,13 @@
       "default": false
     },
     {
+      "key": "worktrees",
+      "label": "worktree あり",
+      "about": "リポジトリのあるフォルダの行に紐づけて表示。space になっている worktree と、まだ space が無いもの、New worktree(ホバー時)",
+      "kind": "switch",
+      "default": true
+    },
+    {
       "key": "parent",
       "label": "親フォルダも space を持つ",
       "about": "左の矢印で開閉、行本体で space を開く",
